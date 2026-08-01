@@ -5,9 +5,13 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("ships the agent-first local Veta product instead of the starter preview", async () => {
-  const [page, app, library, api, layout, css, hosting, bridge, mcp, installer, installGuide, readme, packageJson] = await Promise.all([
+  const [page, app, privacyPage, licensePage, privacyPolicy, license, library, api, layout, css, hosting, bridge, mcp, installer, installGuide, readme, packageJson] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/veta-app.tsx", root), "utf8"),
+    readFile(new URL("app/privacy/page.tsx", root), "utf8"),
+    readFile(new URL("app/license/page.tsx", root), "utf8"),
+    readFile(new URL("PRIVACY.md", root), "utf8"),
+    readFile(new URL("LICENSE", root), "utf8"),
     readFile(new URL("lib/library.ts", root), "utf8"),
     readFile(new URL("app/api/library/route.ts", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
@@ -27,6 +31,12 @@ test("ships the agent-first local Veta product instead of the starter preview", 
   assert.match(app, /Pregunta a tu biblioteca/);
   assert.match(app, /Tu agente se encarga/);
   assert.match(app, /sin configurar otro browser/);
+  assert.match(app, />SPA</);
+  assert.match(app, />ENG</);
+  assert.match(app, /veta-language/);
+  assert.match(app, /useSyncExternalStore/);
+  assert.match(app, /\/privacy#\$\{language\}/);
+  assert.match(app, /\/license/);
   assert.match(app, /127\.0\.0\.1:4317/);
   assert.match(app, /item\.content/);
   assert.match(app, /\.filter\(\(\{ score \}\) => score > 0\)/);
@@ -42,6 +52,15 @@ test("ships the agent-first local Veta product instead of the starter preview", 
   assert.doesNotMatch(api, /seedForUser/);
   assert.match(layout, /og\.png/);
   assert.match(css, /\.library-grid/);
+  assert.match(css, /\.language-selector/);
+  assert.match(css, /\.legal-page/);
+  assert.match(privacyPage, /Política de privacidad/);
+  assert.match(privacyPage, /Privacy Policy/);
+  assert.match(privacyPage, /does not receive or store your X password/);
+  assert.match(licensePage, /MIT License/);
+  assert.match(privacyPolicy, /Effective August 2, 2026/);
+  assert.match(privacyPolicy, /Vigente desde el 2 de agosto de 2026/);
+  assert.match(license, /Permission is hereby granted, free of charge/);
   assert.match(hosting, /"d1": "DB"/);
   assert.match(bridge, /"thread\/start"/);
   assert.match(bridge, /"thread\/resume"/);
@@ -59,6 +78,7 @@ test("ships the agent-first local Veta product instead of the starter preview", 
   assert.match(installGuide, /https:\/\/x\.com\/i\/bookmarks/);
   assert.match(readme, /Install it by asking your agent/);
   assert.match(readme, /https:\/\/github\.com\/nerdconf\/veta/);
+  assert.match(readme, /\[MIT License\]\(LICENSE\)/);
   assert.match(packageJson, /"dev:local"/);
   assert.match(packageJson, /"mcp"/);
   assert.match(packageJson, /--port 4318/);

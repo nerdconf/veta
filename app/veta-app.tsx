@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   FileUp,
+  Globe2,
   Hash,
   Layers3,
   Link2,
@@ -24,10 +25,11 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { LibraryItem } from "../lib/library";
 
 type View = "library" | "ask";
+type Language = "es" | "en";
 type ChatTurn = {
   id: string;
   question: string;
@@ -43,6 +45,82 @@ type AgentState = {
 };
 
 const agentBridgeUrl = "http://127.0.0.1:4317";
+
+const onboardingCopy = {
+  es: {
+    eyebrow: "Primer paso",
+    title: "Convertí tus guardados en contexto",
+    close: "Cerrar onboarding",
+    agentTitle: "Tu agente se encarga",
+    recommended: "Recomendado",
+    agentBody: "Pedile: “sincronizá mis bookmarks de X con Veta”. Va a usar el browser que ya tiene, abrir X y recorrer los guardados.",
+    agentNote: "Sin extensión · sin API de X · sin configurar otro browser",
+    local: "Local",
+    manual: "alternativa manual",
+    pasteLabel: "Pegá todos los enlaces que quieras, uno por línea",
+    import: "Importar",
+    noLinks: "No encontramos enlaces válidos en ese texto.",
+    saveError: "No pudimos guardar los enlaces.",
+    fileMissing: "No encontramos posts de X en ese archivo.",
+    fileError: "No pudimos leer el archivo.",
+    imported: (count: number, skipped: number) => `${count} enlaces importados${skipped ? ` · ${skipped} ya existían` : ""}.`,
+    detected: (count: number) => `${count} posts detectados. Revisalos y presioná Importar.`,
+    fileTitle: "Leer un archivo exportado",
+    fileFormats: "JSON, JS, CSV, Markdown, texto o HTML",
+    choose: "Elegir",
+    loginTitle: "Si X pide login, hacelo en esa misma pestaña.",
+    loginBody: "Es la única pausa humana: Veta nunca ve ni guarda tu contraseña.",
+    privacyLead: "La base queda local; tu agente procesa el contexto con tu suscripción actual.",
+    privacy: "Política de privacidad",
+    license: "Licencia MIT",
+    languageLabel: "Idioma del onboarding",
+  },
+  en: {
+    eyebrow: "First step",
+    title: "Turn your saves into context",
+    close: "Close onboarding",
+    agentTitle: "Your agent handles it",
+    recommended: "Recommended",
+    agentBody: "Ask it: “sync my X bookmarks with Veta”. It will use the browser it already controls, open X, and scan your saves.",
+    agentNote: "No extension · no X API · no extra browser setup",
+    local: "Local",
+    manual: "manual alternative",
+    pasteLabel: "Paste as many links as you want, one per line",
+    import: "Import",
+    noLinks: "We couldn't find any valid links in that text.",
+    saveError: "We couldn't save those links.",
+    fileMissing: "We couldn't find X posts in that file.",
+    fileError: "We couldn't read that file.",
+    imported: (count: number, skipped: number) => `${count} links imported${skipped ? ` · ${skipped} already existed` : ""}.`,
+    detected: (count: number) => `${count} posts detected. Review them and press Import.`,
+    fileTitle: "Read an exported file",
+    fileFormats: "JSON, JS, CSV, Markdown, text, or HTML",
+    choose: "Choose",
+    loginTitle: "If X asks you to log in, do it in that same tab.",
+    loginBody: "That is the only human pause: Veta never sees or stores your password.",
+    privacyLead: "Your database stays local; your agent processes context through your existing subscription.",
+    privacy: "Privacy Policy",
+    license: "MIT License",
+    languageLabel: "Onboarding language",
+  },
+} as const;
+
+const languageEvent = "veta-language-change";
+
+function getLanguageSnapshot(): Language {
+  const stored = window.localStorage.getItem("veta-language");
+  if (stored === "en" || stored === "es") return stored;
+  return window.navigator.language.toLowerCase().startsWith("es") ? "es" : "en";
+}
+
+function subscribeToLanguage(callback: () => void) {
+  window.addEventListener(languageEvent, callback);
+  window.addEventListener("storage", callback);
+  return () => {
+    window.removeEventListener(languageEvent, callback);
+    window.removeEventListener("storage", callback);
+  };
+}
 
 const starterQuestions = [
   "¿Tenemos algo sobre LinkedIn?",
@@ -155,6 +233,7 @@ function SourceGlyph({ item }: { item: LibraryItem }) {
 }
 
 export default function VetaApp() {
+  const language = useSyncExternalStore(subscribeToLanguage, getLanguageSnapshot, () => "es");
   const [view, setView] = useState<View>("library");
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [query, setQuery] = useState("");
@@ -177,13 +256,24 @@ export default function VetaApp() {
   });
   const searchRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const onboarding = onboardingCopy[language];
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/library")
       .then((response) => (response.ok ? response.json() : Promise.reject()))
       .then((data: { items: LibraryItem[] }) => {
-        if (!cancelled) setItems(data.items ?? []);
+        if (!cancelled) {
+          const library = data.items ?? [];
+          setItems(library);
+          if (!library.length && window.localStorage.getItem("veta-onboarding-seen") !== "1") {
+            setImportOpen(true);
+          }
+        }
       })
       .catch(() => {
         // Stay empty instead of presenting demo data as the user's library.
@@ -254,6 +344,7 @@ export default function VetaApp() {
       if (event.key === "Escape") {
         setSelectedItem(null);
         setImportOpen(false);
+        if (importOpen) window.localStorage.setItem("veta-onboarding-seen", "1");
         setMobileMenuOpen(false);
       }
     };
@@ -298,12 +389,22 @@ export default function VetaApp() {
     setMobileMenuOpen(false);
   }
 
+  function changeLanguage(nextLanguage: Language) {
+    window.localStorage.setItem("veta-language", nextLanguage);
+    window.dispatchEvent(new Event(languageEvent));
+  }
+
+  function closeImport() {
+    setImportOpen(false);
+    window.localStorage.setItem("veta-onboarding-seen", "1");
+  }
+
   async function importLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const urls = extractImportUrls(importUrl);
     if (!urls.length) {
       setImportState("error");
-      setImportMessage("No encontramos enlaces válidos en ese texto.");
+      setImportMessage(onboarding.noLinks);
       return;
     }
     setImportState("saving");
@@ -335,13 +436,11 @@ export default function VetaApp() {
       if (imported.length) setItems((current) => [...imported, ...current]);
       setImportUrl("");
       setImportState("done");
-      setImportMessage(
-        `${imported.length} enlaces importados${skipped ? ` · ${skipped} ya existían` : ""}.`,
-      );
+      setImportMessage(onboarding.imported(imported.length, skipped));
     } catch (error) {
       setImportState("error");
       setImportMessage(
-        error instanceof Error ? error.message : "No pudimos guardar los enlaces.",
+        error instanceof Error ? error.message : onboarding.saveError,
       );
     }
   }
@@ -352,12 +451,12 @@ export default function VetaApp() {
     try {
       const text = await file.text();
       const urls = extractImportUrls(text, true);
-      if (!urls.length) throw new Error("No encontramos posts de X en ese archivo.");
+      if (!urls.length) throw new Error(onboarding.fileMissing);
       setImportUrl((current) => [current.trim(), ...urls].filter(Boolean).join("\n"));
-      setImportMessage(`${urls.length} posts detectados. Revisalos y presioná Importar.`);
+      setImportMessage(onboarding.detected(urls.length));
     } catch (error) {
       setImportState("error");
-      setImportMessage(error instanceof Error ? error.message : "No pudimos leer el archivo.");
+      setImportMessage(error instanceof Error ? error.message : onboarding.fileError);
     }
   }
 
@@ -485,6 +584,11 @@ export default function VetaApp() {
               ? `hilo ${agentState.threadId?.slice(0, 8) ?? "local"} · ${tagCount} etiquetas`
               : `${tagCount} etiquetas · Preguntar requiere modo local`}
           </div>
+        </div>
+        <div className="sidebar-legal" aria-label="Legal">
+          <a href={`/privacy#${language}`} target="_blank" rel="noreferrer">{onboarding.privacy}</a>
+          <span>·</span>
+          <a href="/license" target="_blank" rel="noreferrer">MIT</a>
         </div>
       </aside>
 
@@ -771,30 +875,47 @@ export default function VetaApp() {
 
       {importOpen && (
         <div className="modal-layer" role="presentation">
-          <button className="modal-backdrop" aria-label="Cerrar importación" onClick={() => setImportOpen(false)} />
+          <button className="modal-backdrop" aria-label={onboarding.close} onClick={closeImport} />
           <div className="import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
             <div className="modal-head">
               <div>
-                <p className="eyebrow"><span /> Sumar contexto</p>
-                <h2 id="import-title">Sincroniza tus guardados</h2>
+                <p className="eyebrow"><span /> {onboarding.eyebrow}</p>
+                <h2 id="import-title">{onboarding.title}</h2>
               </div>
-              <button aria-label="Cerrar" onClick={() => setImportOpen(false)}><X aria-hidden="true" /></button>
+              <div className="modal-actions">
+                <div className="language-selector" role="group" aria-label={onboarding.languageLabel}>
+                  <Globe2 aria-hidden="true" />
+                  <button
+                    type="button"
+                    className={language === "es" ? "active" : ""}
+                    aria-pressed={language === "es"}
+                    onClick={() => changeLanguage("es")}
+                  >SPA</button>
+                  <button
+                    type="button"
+                    className={language === "en" ? "active" : ""}
+                    aria-pressed={language === "en"}
+                    onClick={() => changeLanguage("en")}
+                  >ENG</button>
+                </div>
+                <button className="modal-close" aria-label={onboarding.close} onClick={closeImport}><X aria-hidden="true" /></button>
+              </div>
             </div>
 
             <div className="connector-card featured-connector">
               <div className="connector-icon local-icon"><Sparkles aria-hidden="true" /></div>
               <div>
-                <div className="connector-title-row"><strong>Tu agente se encarga</strong><span>Recomendado</span></div>
-                <p>Pedile: “sincronizá mis bookmarks de X con Veta”. Va a usar el browser que ya tiene, abrir X y recorrer los guardados.</p>
-                <div className="connector-note"><Check aria-hidden="true" /> Sin extensión · sin API de X · sin configurar otro browser</div>
+                <div className="connector-title-row"><strong>{onboarding.agentTitle}</strong><span>{onboarding.recommended}</span></div>
+                <p>{onboarding.agentBody}</p>
+                <div className="connector-note"><Check aria-hidden="true" /> {onboarding.agentNote}</div>
               </div>
-              <span className="local-badge">Local</span>
+              <span className="local-badge">{onboarding.local}</span>
             </div>
 
-            <div className="modal-or"><span>alternativa manual</span></div>
+            <div className="modal-or"><span>{onboarding.manual}</span></div>
 
             <form className="link-import" onSubmit={importLink}>
-              <label htmlFor="bookmark-url">Pega todos los enlaces que quieras, uno por línea</label>
+              <label htmlFor="bookmark-url">{onboarding.pasteLabel}</label>
               <div className="link-input-row batch-input-row">
                 <Link2 aria-hidden="true" />
                 <textarea
@@ -807,7 +928,7 @@ export default function VetaApp() {
                 />
                 <button disabled={importState === "saving" || !importUrl.trim()}>
                   {importState === "saving" ? <LoaderCircle className="spin" aria-hidden="true" /> : <Plus aria-hidden="true" />}
-                  Importar
+                  {onboarding.import}
                 </button>
               </div>
               {importMessage && <p className={`import-feedback ${importState}`}>{importMessage}</p>}
@@ -826,16 +947,22 @@ export default function VetaApp() {
             />
             <button className="archive-option" onClick={() => fileInputRef.current?.click()}>
               <FileUp aria-hidden="true" />
-              <span><strong>Leer un archivo exportado</strong><small>JSON, JS, CSV, Markdown, texto o HTML</small></span>
-              <span className="soon-badge">Elegir</span>
+              <span><strong>{onboarding.fileTitle}</strong><small>{onboarding.fileFormats}</small></span>
+              <span className="soon-badge">{onboarding.choose}</span>
             </button>
 
             <div className="agent-capture-note">
               <Sparkles aria-hidden="true" />
-              <p><strong>Si X pide login, hacelo en esa misma pestaña.</strong> Es la única pausa humana: Veta nunca ve ni guarda tu contraseña.</p>
+              <p><strong>{onboarding.loginTitle}</strong> {onboarding.loginBody}</p>
             </div>
 
-            <p className="privacy-note"><Bookmark aria-hidden="true" /> La base queda local; tu agente procesa el contexto con tu suscripción actual.</p>
+            <div className="privacy-note">
+              <Bookmark aria-hidden="true" />
+              <span>{onboarding.privacyLead}</span>
+              <a href={`/privacy#${language}`} target="_blank" rel="noreferrer">{onboarding.privacy}</a>
+              <span aria-hidden="true">·</span>
+              <a href="/license" target="_blank" rel="noreferrer">{onboarding.license}</a>
+            </div>
           </div>
         </div>
       )}

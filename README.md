@@ -44,6 +44,11 @@ existing subscription.
 
 See [PRIVACY.md](PRIVACY.md) for the complete boundary.
 
+## Legal
+
+- [Privacy Policy](PRIVACY.md) — English and Spanish
+- [MIT License](LICENSE)
+
 ## Contributor setup
 
 ```bash
