@@ -1,0 +1,31 @@
+{
+  "name": "veta",
+  "version": "0.2.0",
+  "description": "Sync and query saved X posts through a private local context base.",
+  "author": {
+    "name": "Veta contributors",
+    "url": "https://github.com/nerdconf/veta"
+  },
+  "homepage": "https://github.com/nerdconf/veta",
+  "repository": "https://github.com/nerdconf/veta",
+  "license": "MIT",
+  "keywords": ["x", "bookmarks", "knowledge", "mcp", "local-first"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Veta",
+    "shortDescription": "Your saved X posts, searchable and useful",
+    "longDescription": "Use your existing Codex browser session to sync X bookmarks into a private local library, then search and question them through MCP.",
+    "developerName": "Veta contributors",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/nerdconf/veta",
+    "privacyPolicyURL": "https://github.com/nerdconf/veta/blob/main/PRIVACY.md",
+    "defaultPrompt": [
+      "Sync my saved X posts into Veta.",
+      "Search my Veta library for LinkedIn.",
+      "What themes repeat across my saved posts?"
+    ],
+    "brandColor": "#25483A"
+  }
+}

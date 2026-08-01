@@ -1,0 +1,10 @@
+---
+description: Install, sync, and query the local Veta X bookmark library
+alwaysApply: true
+---
+
+When the user asks to install, sync, scrape, import, organize, or query X
+bookmarks with Veta, read `AGENT_INSTALL.md` and follow it completely. Use the
+browser already available to Cursor. Do not ask the user to configure browser
+tooling, an X developer account, or an AI API key. Register Veta with
+`npm run setup -- --agent cursor`.

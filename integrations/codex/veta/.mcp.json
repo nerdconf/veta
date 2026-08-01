@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "veta": {
+      "command": "node",
+      "args": ["./scripts/veta-plugin-launcher.mjs"],
+      "cwd": "."
+    }
+  }
+}

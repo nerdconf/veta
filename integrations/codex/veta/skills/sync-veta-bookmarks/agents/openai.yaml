@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Veta bookmarks"
+  short_description: "Import and query X bookmarks locally"
+  default_prompt: "Use $sync-veta-bookmarks to sync my saved X posts into Veta and verify the import."

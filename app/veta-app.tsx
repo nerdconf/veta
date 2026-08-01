@@ -9,24 +9,23 @@ import {
   Clock3,
   ExternalLink,
   FileText,
-  FolderHeart,
+  FileUp,
   Hash,
-  Inbox,
   Layers3,
   Link2,
   LoaderCircle,
   Menu,
   MessageCircle,
-  MoreHorizontal,
   Plus,
   Search,
   Send,
   Sparkles,
+  Wifi,
+  WifiOff,
   X,
-  Zap,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { filterGroups, seedLibrary, type LibraryItem } from "../lib/library";
+import type { LibraryItem } from "../lib/library";
 
 type View = "library" | "ask";
 type ChatTurn = {
@@ -36,11 +35,27 @@ type ChatTurn = {
   sources: LibraryItem[];
 };
 
+type AgentState = {
+  status: "checking" | "ready" | "offline";
+  provider: string | null;
+  threadId: string | null;
+  error: string | null;
+};
+
+const agentBridgeUrl = "http://127.0.0.1:4317";
+
 const starterQuestions = [
-  "¿Cómo construir agentes de IA más fiables?",
-  "¿Qué ideas se repiten sobre distribución?",
-  "¿Cómo validar mejor una oferta B2B?",
+  "¿Tenemos algo sobre LinkedIn?",
+  "¿Qué ideas se repiten sobre agentes de IA?",
+  "¿Qué guardé sobre growth y distribución?",
 ];
+
+const searchStopWords = new Set([
+  "algo", "algun", "alguna", "algunos", "con", "cual", "cuales", "de", "del",
+  "dice", "dicen", "el", "en", "esta", "esto", "hay", "la", "las", "los",
+  "me", "mis", "por", "que", "sobre", "tenemos", "tengo", "the", "what",
+  "with", "from", "your", "you",
+]);
 
 function searchable(item: LibraryItem) {
   return [
@@ -49,12 +64,15 @@ function searchable(item: LibraryItem) {
     item.handle,
     item.summary,
     item.preview,
+    item.content ?? "",
     item.why,
     ...item.tags,
     ...item.keyPoints,
   ]
     .join(" ")
-    .toLocaleLowerCase("es");
+    .toLocaleLowerCase("es")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 function tokenise(value: string) {
@@ -63,43 +81,61 @@ function tokenise(value: string) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .split(/[^a-z0-9&]+/)
-    .filter((token) => token.length > 2);
+    .filter((token) => token.length > 2 && !searchStopWords.has(token));
 }
 
 function rankSources(question: string, items: LibraryItem[]) {
   const tokens = tokenise(question);
   const scored = items.map((item, index) => {
-    const body = tokenise(searchable(item));
+    const body = searchable(item);
+    const title = tokenise(item.title).join(" ");
+    const tags = tokenise(item.tags.join(" ")).join(" ");
     const score = tokens.reduce(
-      (total, token) => total + body.filter((part) => part.includes(token)).length,
+      (total, token) => {
+        const occurrences = body.split(token).length - 1;
+        return total + Math.min(occurrences, 8) + (title.includes(token) ? 8 : 0) + (tags.includes(token) ? 12 : 0);
+      },
       0,
     );
     return { item, score, index };
   });
 
   const ranked = scored
+    .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || a.index - b.index)
-    .slice(0, 3)
+    .slice(0, 8)
     .map(({ item }) => item);
 
-  return ranked.length > 0 ? ranked : items.slice(0, 3);
+  return ranked;
 }
 
-function composeAnswer(question: string, sources: LibraryItem[]) {
-  const lower = question.toLocaleLowerCase("es");
-  const lead = lower.includes("agente") || lower.includes("ia")
-    ? "La señal más clara es que la fiabilidad no viene de darle más autonomía al agente, sino de diseñar límites, evidencia y recuperación desde el principio."
-    : lower.includes("distrib") || lower.includes("growth") || lower.includes("contenido")
-      ? "Tus guardados apuntan a una misma idea: la distribución funciona mejor cuando nace dentro del trabajo y del producto, no cuando se agrega como promoción al final."
-      : lower.includes("precio") || lower.includes("pricing") || lower.includes("oferta") || lower.includes("b2b")
-        ? "La tesis común es anclar la oferta a un cambio observable para el comprador; si el resultado no puede describirse con nitidez, el precio se vuelve una discusión abstracta."
-        : "Al cruzar tus guardados, aparece un patrón útil: empezar por la evidencia que debería existir al final y diseñar hacia atrás desde esa prueba.";
+function extractImportUrls(value: string, fromFile = false) {
+  const urls = new Set<string>();
+  const matches = value.match(/https?:\/\/[^\s"'<>\\]+/g) ?? [];
 
-  const sourceOne = sources[0];
-  const sourceTwo = sources[1] ?? sourceOne;
-  const sourceThree = sources[2] ?? sourceTwo;
+  for (const raw of matches) {
+    const candidate = raw.replace(/[),.;\]}]+$/g, "");
+    try {
+      const parsed = new URL(candidate);
+      const isXPost =
+        /(^|\.)x\.com$/.test(parsed.hostname) ||
+        /(^|\.)twitter\.com$/.test(parsed.hostname);
+      if (!fromFile || (isXPost && /\/status\/\d+/.test(parsed.pathname))) {
+        urls.add(candidate);
+      }
+    } catch {
+      // Ignore malformed URLs found inside exports.
+    }
+  }
 
-  return `${lead} ${sourceOne.keyPoints[0]} [1] ${sourceTwo.keyPoints[1]} [2] En la práctica, lo convertiría en un experimento pequeño: ${sourceThree.keyPoints[2].toLocaleLowerCase("es")} [3]`;
+  if (fromFile) {
+    const idPattern = /["']?(?:tweetId|tweet_id)["']?\s*[:=]\s*["']?(\d{8,24})/gi;
+    for (const match of value.matchAll(idPattern)) {
+      urls.add(`https://x.com/i/web/status/${match[1]}`);
+    }
+  }
+
+  return [...urls];
 }
 
 function initials(name: string) {
@@ -120,7 +156,7 @@ function SourceGlyph({ item }: { item: LibraryItem }) {
 
 export default function VetaApp() {
   const [view, setView] = useState<View>("library");
-  const [items, setItems] = useState<LibraryItem[]>(seedLibrary);
+  const [items, setItems] = useState<LibraryItem[]>([]);
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("Todos");
   const [selectedItem, setSelectedItem] = useState<LibraryItem | null>(null);
@@ -130,22 +166,78 @@ export default function VetaApp() {
   const [importState, setImportState] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [importMessage, setImportMessage] = useState("");
   const [askInput, setAskInput] = useState("");
+  const [askError, setAskError] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [agentState, setAgentState] = useState<AgentState>({
+    status: "checking",
+    provider: null,
+    threadId: null,
+    error: null,
+  });
   const searchRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/library")
       .then((response) => (response.ok ? response.json() : Promise.reject()))
       .then((data: { items: LibraryItem[] }) => {
-        if (!cancelled && data.items?.length) setItems(data.items);
+        if (!cancelled) setItems(data.items ?? []);
       })
       .catch(() => {
-        // The complete demo library stays available if the local database is offline.
+        // Stay empty instead of presenting demo data as the user's library.
       });
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkAgent() {
+      if (!(["localhost", "127.0.0.1"] as string[]).includes(window.location.hostname)) {
+        if (!cancelled) {
+          setAgentState({
+            status: "offline",
+            provider: null,
+            threadId: null,
+            error: "El hilo funciona en la versión local de Veta.",
+          });
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch(`${agentBridgeUrl}/health`);
+        const data = (await response.json()) as {
+          ok?: boolean;
+          threadId?: string | null;
+          provider?: string | null;
+          error?: string | null;
+        };
+        if (!response.ok || !data.ok) throw new Error(data.error ?? "Agente desconectado");
+        if (!cancelled) {
+          setAgentState({ status: "ready", provider: data.provider ?? "Agente local", threadId: data.threadId ?? null, error: null });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAgentState({
+            status: "offline",
+            provider: null,
+            threadId: null,
+            error: error instanceof Error ? error.message : "Agente desconectado",
+          });
+        }
+      }
+    }
+
+    checkAgent();
+    const timer = window.setInterval(checkAgent, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -170,18 +262,36 @@ export default function VetaApp() {
   }, [importOpen, selectedItem]);
 
   const filteredItems = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase("es");
+    const queryTokens = tokenise(query);
     return items.filter((item) => {
       const matchesFilter =
         activeFilter === "Todos" || item.tags.includes(activeFilter);
       const matchesQuery =
-        !normalizedQuery || searchable(item).includes(normalizedQuery);
+        !queryTokens.length || queryTokens.every((token) => searchable(item).includes(token));
       return matchesFilter && matchesQuery;
     });
   }, [activeFilter, items, query]);
 
+  const filterGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of items) {
+      for (const tag of item.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return [
+      "Todos",
+      ...[...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([tag]) => tag),
+    ];
+  }, [items]);
+
   const readyCount = items.filter((item) => item.status === "ready").length;
   const tagCount = new Set(items.flatMap((item) => item.tags)).size;
+  const collectionRows = filterGroups.slice(1, 5).map((tag, index) => ({
+    tag,
+    count: items.filter((item) => item.tags.includes(tag)).length,
+    dot: ["dot-violet", "dot-orange", "dot-green", "dot-blue"][index],
+  }));
 
   function changeView(nextView: View) {
     setView(nextView);
@@ -190,48 +300,125 @@ export default function VetaApp() {
 
   async function importLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!importUrl.trim()) return;
+    const urls = extractImportUrls(importUrl);
+    if (!urls.length) {
+      setImportState("error");
+      setImportMessage("No encontramos enlaces válidos en ese texto.");
+      return;
+    }
     setImportState("saving");
     setImportMessage("");
 
     try {
-      const response = await fetch("/api/library", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: importUrl }),
-      });
-      const data = (await response.json()) as { item?: LibraryItem; error?: string };
-      if (!response.ok || !data.item) throw new Error(data.error ?? "No se pudo guardar");
-      setItems((current) => [data.item!, ...current]);
+      const imported: LibraryItem[] = [];
+      let skipped = 0;
+      for (let index = 0; index < urls.length; index += 8) {
+        const batch = urls.slice(index, index + 8);
+        const results = await Promise.all(
+          batch.map(async (url) => {
+            const response = await fetch("/api/library", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ url }),
+            });
+            const data = (await response.json()) as { item?: LibraryItem; error?: string };
+            if (response.status === 409) return null;
+            if (!response.ok || !data.item) throw new Error(data.error ?? "No se pudo guardar");
+            return data.item;
+          }),
+        );
+        for (const item of results) {
+          if (item) imported.push(item);
+          else skipped += 1;
+        }
+      }
+      if (imported.length) setItems((current) => [...imported, ...current]);
       setImportUrl("");
       setImportState("done");
-      setImportMessage("Guardado. Ya está en la cola de enriquecimiento.");
+      setImportMessage(
+        `${imported.length} enlaces importados${skipped ? ` · ${skipped} ya existían` : ""}.`,
+      );
     } catch (error) {
       setImportState("error");
       setImportMessage(
-        error instanceof Error ? error.message : "No pudimos guardar este enlace.",
+        error instanceof Error ? error.message : "No pudimos guardar los enlaces.",
       );
     }
   }
 
-  function ask(questionOverride?: string) {
+  async function loadImportFile(file: File) {
+    setImportState("idle");
+    setImportMessage("");
+    try {
+      const text = await file.text();
+      const urls = extractImportUrls(text, true);
+      if (!urls.length) throw new Error("No encontramos posts de X en ese archivo.");
+      setImportUrl((current) => [current.trim(), ...urls].filter(Boolean).join("\n"));
+      setImportMessage(`${urls.length} posts detectados. Revisalos y presioná Importar.`);
+    } catch (error) {
+      setImportState("error");
+      setImportMessage(error instanceof Error ? error.message : "No pudimos leer el archivo.");
+    }
+  }
+
+  async function ask(questionOverride?: string) {
     const question = (questionOverride ?? askInput).trim();
     if (!question || isThinking) return;
     setAskInput("");
+    setAskError("");
     setIsThinking(true);
-    window.setTimeout(() => {
-      const sources = rankSources(question, items.filter((item) => item.status === "ready"));
+    const sources = rankSources(question, items.filter((item) => item.status === "ready"));
+
+    if (!sources.length) {
       setTurns((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           question,
-          answer: composeAnswer(question, sources),
-          sources,
+          answer: "No encontré coincidencias textuales para ese tema en la biblioteca. No voy a inventar una respuesta ni elegir fuentes al azar.",
+          sources: [],
         },
       ]);
       setIsThinking(false);
-    }, 650);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${agentBridgeUrl}/ask`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question, sources }),
+      });
+      const data = (await response.json()) as {
+        answer?: string;
+        threadId?: string;
+        provider?: string;
+        error?: string;
+      };
+      if (!response.ok || !data.answer) {
+        throw new Error(data.error ?? "El hilo no devolvió una respuesta.");
+      }
+      setTurns((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          question,
+          answer: data.answer!,
+          sources,
+        },
+      ]);
+      setAgentState({ status: "ready", provider: data.provider ?? "Agente local", threadId: data.threadId ?? null, error: null });
+    } catch (error) {
+      setAskInput(question);
+      setAskError(
+        error instanceof Error
+          ? error.message
+          : "No pudimos conectar con el hilo local.",
+      );
+      setAgentState((current) => ({ ...current, status: "offline" }));
+    } finally {
+      setIsThinking(false);
+    }
   }
 
   return (
@@ -266,52 +453,38 @@ export default function VetaApp() {
             Preguntar
             <span className="nav-spark"><Sparkles aria-hidden="true" /></span>
           </button>
-          <button className="nav-item muted-nav" onClick={() => setActiveFilter("Inbox")}>
-            <Inbox aria-hidden="true" />
-            Inbox
-            <span className="nav-count">{items.filter((item) => item.status === "processing").length}</span>
-          </button>
         </nav>
 
         <div className="sidebar-rule" />
 
         <div className="sidebar-section">
           <div className="section-label">Colecciones</div>
-          <button className="collection-row" onClick={() => { setActiveFilter("IA & agentes"); changeView("library"); }}>
-            <span className="collection-dot dot-violet" />
-            IA & agentes
-            <span>2</span>
-          </button>
-          <button className="collection-row" onClick={() => { setActiveFilter("Growth"); changeView("library"); }}>
-            <span className="collection-dot dot-orange" />
-            Growth & distribución
-            <span>2</span>
-          </button>
-          <button className="collection-row" onClick={() => { setActiveFilter("Sistemas"); changeView("library"); }}>
-            <span className="collection-dot dot-green" />
-            Sistemas de trabajo
-            <span>4</span>
-          </button>
-          <button className="collection-row" onClick={() => { setActiveFilter("Pricing"); changeView("library"); }}>
-            <span className="collection-dot dot-blue" />
-            Ventas & pricing
-            <span>1</span>
-          </button>
+          {collectionRows.map((collection) => (
+            <button className="collection-row" key={collection.tag} onClick={() => { setActiveFilter(collection.tag); changeView("library"); }}>
+              <span className={`collection-dot ${collection.dot}`} />
+              {collection.tag}
+              <span>{collection.count}</span>
+            </button>
+          ))}
           <button className="collection-row collection-add" onClick={() => setImportOpen(true)}>
             <Plus aria-hidden="true" />
-            Nueva colección
+            Sincronizar X
           </button>
         </div>
 
         <div className="sync-card">
           <div className="sync-card-top">
-            <span className="pulse-dot" />
-            <span>Motor listo</span>
-            <MoreHorizontal aria-hidden="true" />
+            <span className={`pulse-dot ${agentState.status === "ready" ? "" : "pulse-offline"}`} />
+            <span>{agentState.status === "ready" ? "Agente conectado" : "Modo biblioteca"}</span>
+            {agentState.status === "ready" ? <Wifi aria-hidden="true" /> : <WifiOff aria-hidden="true" />}
           </div>
           <div className="sync-title">{readyCount} piezas procesadas</div>
           <div className="sync-progress"><span style={{ width: "78%" }} /></div>
-          <div className="sync-meta">{tagCount} etiquetas · biblioteca demo</div>
+          <div className="sync-meta">
+            {agentState.status === "ready"
+              ? `hilo ${agentState.threadId?.slice(0, 8) ?? "local"} · ${tagCount} etiquetas`
+              : `${tagCount} etiquetas · Preguntar requiere modo local`}
+          </div>
         </div>
       </aside>
 
@@ -347,10 +520,10 @@ export default function VetaApp() {
             <kbd>/</kbd>
           </div>
           <button className="sync-button" onClick={() => setImportOpen(true)}>
-            <Zap aria-hidden="true" />
-            Sincronizar X
+            <Plus aria-hidden="true" />
+            Sincronizar
           </button>
-          <button className="avatar-button" aria-label="Cuenta de Tomi">TS</button>
+          <button className="avatar-button" aria-label="Veta local">VT</button>
         </header>
 
         {view === "library" ? (
@@ -450,10 +623,39 @@ export default function VetaApp() {
               <div className="ask-symbol"><Sparkles aria-hidden="true" /></div>
               <p className="eyebrow"><span /> Pregunta a tu biblioteca</p>
               <h1>Conecta ideas que<br /><em>ya elegiste guardar.</em></h1>
-              <p>
+              <p className="ask-description">
                 Veta responde usando solamente tu contexto y deja cada fuente a la vista.
               </p>
+              <div className={`agent-pill ${agentState.status}`}>
+                {agentState.status === "ready" ? <Wifi aria-hidden="true" /> : <WifiOff aria-hidden="true" />}
+                <span>
+                  <strong>
+                    {agentState.status === "ready"
+                      ? `${agentState.provider ?? "Agente"} conectado`
+                      : agentState.status === "checking"
+                        ? "Conectando con tu agente"
+                        : "Hilo local desconectado"}
+                  </strong>
+                  <small>
+                    {agentState.status === "ready"
+                      ? `Veta — biblioteca local · ${agentState.threadId?.slice(0, 8) ?? "activo"}`
+                      : "Disponible al iniciar Veta en modo local"}
+                  </small>
+                </span>
+              </div>
             </section>
+
+            {agentState.status === "offline" && (
+              <div className="agent-offline-card">
+                <WifiOff aria-hidden="true" />
+                <div>
+                  <strong>Podés preguntar desde tu agente</strong>
+                  <p>Codex, Claude Code o Cursor ya tienen acceso a esta biblioteca mediante Veta MCP. El chat dentro de la app se activa con el puente local de Codex.</p>
+                </div>
+              </div>
+            )}
+
+            {askError && <div className="ask-error">{askError}</div>}
 
             {turns.length === 0 ? (
               <div className="ask-starter">
@@ -514,7 +716,10 @@ export default function VetaApp() {
                   {isThinking ? <LoaderCircle className="spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
                 </button>
               </form>
-              <p>Responde desde {readyCount} piezas procesadas · <button onClick={() => changeView("library")}>ver fuentes</button></p>
+              <p>
+                {agentState.status === "ready" ? "Hilo local activo" : "Esperando agente local"}
+                {" · "}{readyCount} piezas procesadas · <button onClick={() => changeView("library")}>ver fuentes</button>
+              </p>
             </div>
           </div>
         )}
@@ -571,50 +776,66 @@ export default function VetaApp() {
             <div className="modal-head">
               <div>
                 <p className="eyebrow"><span /> Sumar contexto</p>
-                <h2 id="import-title">Trae tus guardados a Veta</h2>
+                <h2 id="import-title">Sincroniza tus guardados</h2>
               </div>
               <button aria-label="Cerrar" onClick={() => setImportOpen(false)}><X aria-hidden="true" /></button>
             </div>
 
             <div className="connector-card featured-connector">
-              <div className="connector-icon x-icon">X</div>
+              <div className="connector-icon local-icon"><Sparkles aria-hidden="true" /></div>
               <div>
-                <div className="connector-title-row"><strong>Sincronización automática</strong><span>Recomendado</span></div>
-                <p>Lee tus bookmarks con permiso de solo lectura y agrega únicamente lo nuevo.</p>
-                <div className="connector-note"><Check aria-hidden="true" /> Requiere una app en X Developer y OAuth 2.0</div>
+                <div className="connector-title-row"><strong>Tu agente se encarga</strong><span>Recomendado</span></div>
+                <p>Pedile: “sincronizá mis bookmarks de X con Veta”. Va a usar el browser que ya tiene, abrir X y recorrer los guardados.</p>
+                <div className="connector-note"><Check aria-hidden="true" /> Sin extensión · sin API de X · sin configurar otro browser</div>
               </div>
-              <a href="https://console.x.com" target="_blank" rel="noreferrer">Preparar cuenta <ArrowUpRight aria-hidden="true" /></a>
+              <span className="local-badge">Local</span>
             </div>
 
-            <div className="modal-or"><span>o empieza ahora</span></div>
+            <div className="modal-or"><span>alternativa manual</span></div>
 
             <form className="link-import" onSubmit={importLink}>
-              <label htmlFor="bookmark-url">Pega un enlace de X o de un artículo</label>
-              <div className="link-input-row">
+              <label htmlFor="bookmark-url">Pega todos los enlaces que quieras, uno por línea</label>
+              <div className="link-input-row batch-input-row">
                 <Link2 aria-hidden="true" />
-                <input
+                <textarea
                   id="bookmark-url"
-                  type="url"
                   value={importUrl}
                   onChange={(event) => { setImportUrl(event.target.value); setImportState("idle"); }}
-                  placeholder="https://x.com/…"
+                  placeholder={"https://x.com/…\nhttps://un-articulo.com/…"}
                   required
+                  rows={4}
                 />
                 <button disabled={importState === "saving" || !importUrl.trim()}>
                   {importState === "saving" ? <LoaderCircle className="spin" aria-hidden="true" /> : <Plus aria-hidden="true" />}
-                  Guardar
+                  Importar
                 </button>
               </div>
               {importMessage && <p className={`import-feedback ${importState}`}>{importMessage}</p>}
             </form>
 
-            <button className="archive-option">
-              <FolderHeart aria-hidden="true" />
-              <span><strong>Importar un archivo completo</strong><small>Preparado para el export de X en la próxima fase</small></span>
-              <span className="soon-badge">Próximo</span>
+            <input
+              ref={fileInputRef}
+              className="hidden-file-input"
+              type="file"
+              accept=".json,.js,.csv,.md,.txt,.html"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) loadImportFile(file);
+                event.currentTarget.value = "";
+              }}
+            />
+            <button className="archive-option" onClick={() => fileInputRef.current?.click()}>
+              <FileUp aria-hidden="true" />
+              <span><strong>Leer un archivo exportado</strong><small>JSON, JS, CSV, Markdown, texto o HTML</small></span>
+              <span className="soon-badge">Elegir</span>
             </button>
 
-            <p className="privacy-note"><Bookmark aria-hidden="true" /> Tu biblioteca se publica con acceso privado.</p>
+            <div className="agent-capture-note">
+              <Sparkles aria-hidden="true" />
+              <p><strong>Si X pide login, hacelo en esa misma pestaña.</strong> Es la única pausa humana: Veta nunca ve ni guarda tu contraseña.</p>
+            </div>
+
+            <p className="privacy-note"><Bookmark aria-hidden="true" /> La base queda local; tu agente procesa el contexto con tu suscripción actual.</p>
           </div>
         </div>
       )}

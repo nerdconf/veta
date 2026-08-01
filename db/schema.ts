@@ -15,6 +15,7 @@ export const libraryItems = sqliteTable(
     readingMinutes: integer("reading_minutes").notNull(),
     summary: text("summary").notNull(),
     preview: text("preview").notNull(),
+    content: text("content").notNull().default(""),
     why: text("why_it_matters").notNull(),
     keyPoints: text("key_points", { mode: "json" }).$type<string[]>().notNull(),
     tags: text("tags", { mode: "json" }).$type<string[]>().notNull(),
@@ -27,3 +28,8 @@ export const libraryItems = sqliteTable(
   ],
 );
 
+export const libraryProfiles = sqliteTable("library_profiles", {
+  userId: text("user_id").primaryKey(),
+  hasRealImport: integer("has_real_import", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at").notNull(),
+});
